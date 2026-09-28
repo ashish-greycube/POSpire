@@ -176,9 +176,10 @@ def get_offline_print_config(pos_profile: str) -> dict:
 
 	Called once while online (at shift-open) and cached client-side under
 	`offline.print_config:<pos_profile>`; read again at print time, online
-	or off. Never throws — a missing/unconfigured piece comes back as None
-	so the caller can decide what to do (show an error, or just print
-	without a printer address), rather than the whole shift-open failing.
+	or off. Aside from the permission check below, never throws — a
+	missing/unconfigured piece comes back as None so the caller can decide
+	what to do (show an error, or just print without a printer address),
+	rather than the whole shift-open failing.
 
 	Args:
 		pos_profile (str): Name of the POS Profile
@@ -188,6 +189,12 @@ def get_offline_print_config(pos_profile: str) -> dict:
 			company_address_display, date_format, time_format,
 			number_format, currency, currency_symbol, currency_precision.
 	"""
+	# This otherwise-open endpoint hands back the printer's network address,
+	# the company's address, and the full receipt template for whichever
+	# POS Profile is named — none of which should be readable by a user who
+	# has no access to that profile.
+	frappe.has_permission("POS Profile", "read", pos_profile, throw=True)
+
 	profile = frappe.get_cached_doc("POS Profile", pos_profile)
 	company = profile.company
 

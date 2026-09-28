@@ -4194,30 +4194,8 @@ export default {
 				}, 0);
 			}
 		},
-		load_print_page(invoice_name) {
-			const print_format =
-				this.pos_profile.print_format_for_online || this.pos_profile.print_format;
-			const letter_head = this.pos_profile.letter_head || 0;
-			const url =
-				window.location.origin +
-				"/printview?doctype=Sales%20Invoice&name=" +
-				invoice_name +
-				"&trigger_print=1" +
-				"&format=" +
-				print_format +
-				"&no_letterhead=" +
-				letter_head;
-			const printWindow = window.open(url, "Print");
-			printWindow.addEventListener(
-				"load",
-				function () {
-					printWindow.print();
-					// printWindow.close();
-					// NOTE : uncomoent this to auto closing printing window
-				},
-				true,
-			);
-		},
+		// load_print_page() moved to hardwareUtils.js (shared with Payments.vue
+		// and printReceipt()) — this mixin already provides it.
 
 		async print_draft_invoice() {
 			if (this.printingDraft) return;

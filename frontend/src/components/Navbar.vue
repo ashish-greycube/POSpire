@@ -342,6 +342,13 @@ export default {
     },
     async logOut() {
       this.logged_out = true;
+      // sessionStorage survives a logout in the same tab — without this,
+      // the next cashier on this till could reprint whatever THIS cashier
+      // last sold via Print Last Invoice. readLastInvoiceIds() also
+      // refuses to hand back an entry stamped with a different cashier,
+      // but clearing it here removes the stale entry outright rather than
+      // relying solely on that check.
+      clearLastInvoiceIds();
       // The cached POS configuration must not outlive the session that fetched
       // it; the next cashier may have a different profile set.
       try {

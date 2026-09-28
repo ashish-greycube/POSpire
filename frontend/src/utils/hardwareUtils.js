@@ -1,7 +1,7 @@
 import { call, unwrapStale } from "@/utils/call";
 import { toast } from "vue3-toastify";
 import { __ } from "@/utils/translate";
-import { PRINT_CONFIG_CACHE_KEY_PREFIX } from "@/utils/call-registry";
+import { PRINT_CONFIG_CACHE_KEY_PREFIX, TAX_CONFIG_CACHE_KEY_PREFIX } from "@/utils/call-registry";
 import { buildPrintContext } from "@/offline/print/context";
 import { renderReceiptXml } from "@/offline/print/xml";
 import { xmlToReceiptHtml } from "@/offline/print/html";
@@ -58,6 +58,33 @@ export default {
 			}
 		},
 
+		/**
+		 * Read (and, online, prime the durable cache for) the offline tax
+		 * config used to estimate cart tax before submit. Offline receipts
+		 * need it too: Invoice.vue's checkout doc builder intentionally
+		 * leaves `doc.taxes` empty at submit time (the server recomputes
+		 * on sync), so without this an offline/reprinted receipt would
+		 * show no tax lines and a grand_total that doesn't match what the
+		 * cashier and customer actually saw on screen at checkout.
+		 */
+		async getTaxConfig(pos_profile_name) {
+			if (!pos_profile_name) return null;
+			try {
+				const config = unwrapStale(
+					await call({
+						method: "pospire.pospire.api.posapp.get_offline_tax_config",
+						args: { pos_profile: pos_profile_name },
+						intent: "read",
+						cacheKey: TAX_CONFIG_CACHE_KEY_PREFIX + pos_profile_name,
+					}),
+				);
+				return config || null;
+			} catch (err) {
+				console.warn("[hardwareUtils] getTaxConfig unavailable", err);
+				return null;
+			}
+		},
+
 		/** The one place that actually talks to the printer agent, both for
 		 * the live (online) XML and the offline-rendered one — extracted so
 		 * there's a single fetch call to reason about, not one per caller. */
@@ -94,12 +121,22 @@ export default {
 		 *
 		 * Call shapes:
 		 *   printReceipt({ name })              — print a real, already-
-		 *     submitted/synced invoice by its server name. Always the
-		 *     online path (see Navbar.vue's reprint logic — this shape is
-		 *     only used once a sale's server_doc_name is known).
+		 *     submitted/synced invoice by its server name. Requires
+		 *     connectivity (the server renders it); the caller is not
+		 *     supposed to reach for this shape unless the sale's
+		 *     server_doc_name is already known (see Navbar.vue's reprint
+		 *     logic).
 		 *   printReceipt({ invoice, offlineId }) — print from an in-memory
 		 *     invoice object: a sale just submitted (online or offline),
 		 *     or one reconstructed from a stored offline sale for reprint.
+		 *     `offlineId` is the signal that the sale may not exist on the
+		 *     server yet, so this ALWAYS renders locally from `invoice` —
+		 *     regardless of current connectivity. Deciding this branch
+		 *     from connectivity instead broke two real cases: a sale
+		 *     queued while nominally online (network error on submit, or
+		 *     an offline-created customer), and reprinting a pending sale
+		 *     right after reconnecting but before sync has run — both hit
+		 *     the server for an OFFLINE-INV-... name it doesn't have.
 		 *
 		 * No silent fallback on failure, in any of the four cells —
 		 * matches how the online path has always behaved (a Hardware-
@@ -109,30 +146,67 @@ export default {
 		async printReceipt({ name, invoice, offlineId } = {}) {
 			const posProfile = this.pos_profile || {};
 			const hwOn = !!posProfile.posa_hardware_manager;
-			const online = connectivity.isOnline();
 
 			try {
-				if (hwOn && online) {
-					return await this._printThermalOnline(name || invoice?.name);
+				if (offlineId) {
+					return hwOn
+						? await this._printThermalOffline(invoice, offlineId, posProfile)
+						: await this._printBrowserOffline(invoice, offlineId, posProfile);
 				}
-				if (hwOn && !online) {
-					return await this._printThermalOffline(invoice, offlineId, posProfile);
+
+				// No offlineId => a real, already-server-known invoice. Both
+				// branches below need the server (generate_print_xml or
+				// /printview), so there is nothing useful to do offline.
+				if (!connectivity.isOnline()) {
+					toast.error(__("This receipt needs a connection to print."));
+					return false;
 				}
-				if (!hwOn && online) {
-					if (posProfile.posa_browser_receipt_from_xml) {
-						return await this._printBrowserFromTemplateOnline(name || invoice?.name);
-					}
-					// Unchanged legacy path: the profile's own print format via /printview.
-					this.load_print_page(name || invoice?.name);
-					return true;
+				const resolvedName = name || invoice?.name;
+				if (hwOn) {
+					return await this._printThermalOnline(resolvedName);
 				}
-				// !hwOn && !online
-				return await this._printBrowserOffline(invoice, offlineId, posProfile);
+				if (posProfile.posa_browser_receipt_from_xml) {
+					return await this._printBrowserFromTemplateOnline(resolvedName);
+				}
+				// Unchanged legacy path: the profile's own print format via /printview.
+				this.load_print_page(resolvedName);
+				return true;
 			} catch (err) {
 				console.error("[hardwareUtils] printReceipt failed:", err);
 				toast.error(err?.userMessage || __("Could not print the receipt. Please try again."));
 				return false;
 			}
+		},
+
+		/**
+		 * Legacy online-only print via the profile's own print format
+		 * (/printview), used when Hardware Manager is off and the
+		 * "Browser receipt from XML template" toggle is off. Moved here
+		 * from Invoice.vue/Payments.vue (it was duplicated verbatim in
+		 * both) so printReceipt() can call it as a mixin method too.
+		 */
+		load_print_page(invoice_name) {
+			const name = invoice_name || this.invoice_doc?.name;
+			const print_format =
+				this.pos_profile.print_format_for_online || this.pos_profile.print_format;
+			const letter_head = this.pos_profile.letter_head || 0;
+			const url =
+				window.location.origin +
+				"/printview?doctype=Sales%20Invoice&name=" +
+				name +
+				"&trigger_print=1" +
+				"&format=" +
+				print_format +
+				"&no_letterhead=" +
+				letter_head;
+			const printWindow = window.open(url, "Print");
+			printWindow.addEventListener(
+				"load",
+				function () {
+					printWindow.print();
+				},
+				true,
+			);
 		},
 
 		async _printThermalOnline(invoiceName) {
@@ -147,7 +221,10 @@ export default {
 		},
 
 		async _printThermalOffline(invoice, offlineId, posProfile) {
-			const config = await this.getPrintConfig(posProfile.name);
+			const [config, taxConfig] = await Promise.all([
+				this.getPrintConfig(posProfile.name),
+				this.getTaxConfig(posProfile.name),
+			]);
 			if (!config || !config.printer_url || !config.template) {
 				const err = new Error("print config not cached");
 				err.userMessage = __(
@@ -158,6 +235,7 @@ export default {
 			const doc = buildPrintContext(invoice, {
 				posProfile,
 				printConfig: config,
+				taxConfig,
 				offlineId,
 				pendingSync: true,
 			});
@@ -186,12 +264,17 @@ export default {
 				toast.warning(__("Allow pop-ups for POSpire to print receipts."));
 				return false;
 			}
-			const xmlPayload = await frappeCall(
-				"pospire.pospire.api.hardware_manager.generate_print_xml",
-				{ doc_type: "Sales Invoice", sales_invoice_name: invoiceName },
-			);
-			this._writeReceiptWindow(win, xmlToReceiptHtml(xmlPayload));
-			return true;
+			try {
+				const xmlPayload = await frappeCall(
+					"pospire.pospire.api.hardware_manager.generate_print_xml",
+					{ doc_type: "Sales Invoice", sales_invoice_name: invoiceName },
+				);
+				this._writeReceiptWindow(win, xmlToReceiptHtml(xmlPayload));
+				return true;
+			} catch (err) {
+				win.close();
+				throw err;
+			}
 		},
 
 		async _printBrowserOffline(invoice, offlineId, posProfile) {
@@ -200,35 +283,42 @@ export default {
 				toast.warning(__("Allow pop-ups for POSpire to print receipts."));
 				return false;
 			}
-			const config = await this.getPrintConfig(posProfile.name);
-			if (!config || !config.template) {
-				win.close();
-				const err = new Error("print config not cached");
-				err.userMessage = __(
-					"Receipt settings are not saved on this till. Connect once to download them.",
-				);
-				throw err;
-			}
-			const doc = buildPrintContext(invoice, {
-				posProfile,
-				printConfig: config,
-				offlineId,
-				pendingSync: true,
-			});
-			let xml;
 			try {
-				xml = renderReceiptXml(config.template, doc, config);
-			} catch (renderErr) {
+				const [config, taxConfig] = await Promise.all([
+					this.getPrintConfig(posProfile.name),
+					this.getTaxConfig(posProfile.name),
+				]);
+				if (!config || !config.template) {
+					const err = new Error("print config not cached");
+					err.userMessage = __(
+						"Receipt settings are not saved on this till. Connect once to download them.",
+					);
+					throw err;
+				}
+				const doc = buildPrintContext(invoice, {
+					posProfile,
+					printConfig: config,
+					taxConfig,
+					offlineId,
+					pendingSync: true,
+				});
+				let xml;
+				try {
+					xml = renderReceiptXml(config.template, doc, config);
+				} catch (renderErr) {
+					const err = new Error("template render failed offline");
+					err.userMessage = __(
+						"The receipt template cannot print offline: {0}. Ask your admin to check the POS XML Print Designer warnings.",
+						[renderErr?.message || renderErr],
+					);
+					throw err;
+				}
+				this._writeReceiptWindow(win, xmlToReceiptHtml(xml));
+				return true;
+			} catch (err) {
 				win.close();
-				const err = new Error("template render failed offline");
-				err.userMessage = __(
-					"The receipt template cannot print offline: {0}. Ask your admin to check the POS XML Print Designer warnings.",
-					[renderErr?.message || renderErr],
-				);
 				throw err;
 			}
-			this._writeReceiptWindow(win, xmlToReceiptHtml(xml));
-			return true;
 		},
 
 		_writeReceiptWindow(win, bodyHtml) {

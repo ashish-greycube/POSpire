@@ -18,7 +18,8 @@
  * preprocessor the way an earlier draft of this feature did.
  */
 import nunjucks from "nunjucks";
-import { flt } from "@/utils/numberFormat";
+import { flt, format_number } from "@/utils/numberFormat";
+import { datetime } from "@/utils/datetime";
 
 function cut(text, n) {
 	return String(text ?? "").slice(0, Number(n));
@@ -43,10 +44,13 @@ function padLeft(s, w) {
 		.slice(0, w);
 }
 function padRight(s, w) {
-	// pad_right is Python .rjust() — right-align, pad on the left.
+	// pad_right is Python .rjust() — right-align, pad on the left. The
+	// server's version is str(s).rjust(w)[:w] — keeps the FIRST w
+	// characters, not the last — slice(-w) here kept the wrong end
+	// ("1,234,567.00", 8) -> "4,567.00" instead of "1,234,56".
 	return String(s ?? "")
 		.padStart(w)
-		.slice(-w);
+		.slice(0, w);
 }
 function padCenter(s, w) {
 	const str = String(s ?? "");
@@ -60,18 +64,49 @@ function truncateHelper(s, w) {
 	return (str.length > w ? str.slice(0, w) + "..." : str.padEnd(w)).slice(0, w);
 }
 
-function formatNumber(value, precision) {
-	const num = Number(value) || 0;
-	const fixed = num.toFixed(precision);
-	const [intPart, decPart] = fixed.split(".");
-	const withCommas = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-	return decPart ? `${withCommas}.${decPart}` : withCommas;
+// Every date_format / time_format option System Settings allows (see
+// system_settings.json's Select fields) — a closed, small set, so a
+// lookup table is simpler and safer than a general token engine.
+function formatDateValue(value, format) {
+	if (!value) return "";
+	const d = datetime.str_to_obj(value);
+	if (!d || Number.isNaN(d.getTime())) return String(value);
+	const yyyy = d.getFullYear();
+	const mm = String(d.getMonth() + 1).padStart(2, "0");
+	const dd = String(d.getDate()).padStart(2, "0");
+	switch (format) {
+		case "dd-mm-yyyy":
+			return `${dd}-${mm}-${yyyy}`;
+		case "dd/mm/yyyy":
+			return `${dd}/${mm}/${yyyy}`;
+		case "dd.mm.yyyy":
+			return `${dd}.${mm}.${yyyy}`;
+		case "mm/dd/yyyy":
+			return `${mm}/${dd}/${yyyy}`;
+		case "mm-dd-yyyy":
+			return `${mm}-${dd}-${yyyy}`;
+		case "yyyy-mm-dd":
+		default:
+			return `${yyyy}-${mm}-${dd}`;
+	}
+}
+function formatTimeValue(value, format) {
+	if (!value) return "";
+	const d = datetime.str_to_obj(value);
+	if (!d || Number.isNaN(d.getTime())) return String(value);
+	const HH = String(d.getHours()).padStart(2, "0");
+	const mm = String(d.getMinutes()).padStart(2, "0");
+	const ss = String(d.getSeconds()).padStart(2, "0");
+	return format === "HH:mm" ? `${HH}:${mm}` : `${HH}:${mm}:${ss}`;
 }
 
 function buildEnvironment(settings) {
 	const env = new nunjucks.Environment(null, { autoescape: true, throwOnUndefined: false });
 	const precision = settings?.currency_precision ?? 2;
 	const symbol = settings?.currency_symbol || "";
+	const numberFormat = settings?.number_format;
+	const dateFormat = settings?.date_format;
+	const timeFormat = settings?.time_format;
 
 	const globals = {
 		truncate: truncateHelper,
@@ -86,7 +121,8 @@ function buildEnvironment(settings) {
 		// (S2) — the SAME site number-format/currency the online path
 		// would use — rather than a browser default, so a receipt printed
 		// offline is formatted identically to one printed online.
-		format_money: (x) => (symbol ? symbol + " " : "") + formatNumber(x, precision),
+		format_money: (x) =>
+			(symbol ? symbol + " " : "") + format_number(x, numberFormat, precision),
 		format_qty: (x) => flt(x, 2).toFixed(2),
 		upper: (s) => String(s ?? "").toUpperCase(),
 		lower: (s) => String(s ?? "").toLowerCase(),
@@ -94,14 +130,15 @@ function buildEnvironment(settings) {
 			String(s ?? "")
 				.toLowerCase()
 				.replace(/(^|\s)\S/g, (c) => c.toUpperCase()),
-		format_datetime: (dt) => (dt ? String(dt) : ""),
-		format_date: (d) => (d ? String(d) : ""),
-		format_time: (t) => (t ? String(t) : ""),
+		format_datetime: (dt) =>
+			dt ? `${formatDateValue(dt, dateFormat)} ${formatTimeValue(dt, timeFormat)}` : "",
+		format_date: (d) => formatDateValue(d, dateFormat),
+		format_time: (t) => formatTimeValue(t, timeFormat),
 		abs: (x) => Math.abs(Number(x) || 0),
-		round: (x) => Math.round(Number(x) || 0),
+		round: (x, n = 0) => flt(x, n),
 		int: (x) => parseInt(x, 10) || 0,
 		float: (x) => flt(x),
-		format_currency: (x) => formatNumber(x, precision),
+		format_currency: (x) => format_number(x, numberFormat, precision),
 		_: (s) => s, // no offline translation catalogue
 	};
 	for (const [name, fn] of Object.entries(globals)) {

@@ -20,6 +20,7 @@ import { computeOfflineTax } from "@/offline/tax";
 import { currentCashier } from "@/offline/cashier";
 import { datetime } from "@/utils/datetime";
 import { flt } from "@/utils/numberFormat";
+import { provisionalNameFor } from "@/offline/outbox";
 
 export function buildPrintContext(invoice, opts = {}) {
 	const posProfile = opts.posProfile || {};
@@ -57,6 +58,11 @@ export function buildPrintContext(invoice, opts = {}) {
 	let net_total = netTotalBase;
 	let total_taxes_and_charges = 0;
 	let grand_total = netTotalBase;
+	// Defaults to the invoice's own value (set at checkout, before this
+	// module ever runs) unless a branch below overrides it — see the
+	// taxConfig branch, which must not mix a value computed here with one
+	// computed by a different code path.
+	let rounded_total = flt(invoice.rounded_total || netTotalBase, precision);
 
 	if (Array.isArray(invoice.taxes) && invoice.taxes.length) {
 		// Prefer taxes already computed onto the invoice (checkout already
@@ -77,11 +83,19 @@ export function buildPrintContext(invoice, opts = {}) {
 		);
 		net_total = flt(invoice.net_total ?? netTotalBase, precision);
 		grand_total = flt(invoice.grand_total ?? netTotalBase + total_taxes_and_charges, precision);
+		rounded_total = flt(invoice.rounded_total || grand_total, precision);
 	} else if (taxConfig) {
-		// No tax rows on the invoice yet (e.g. reprinting from a payload
-		// saved before checkout finished computing them) — fall back to
-		// estimating from the cached tax config rather than printing a
-		// receipt with no tax lines at all.
+		// No tax rows on the invoice yet (e.g. an offline submit, which
+		// deliberately leaves `doc.taxes` empty for the server to recompute
+		// on sync, or reprinting from a payload saved before checkout
+		// finished computing them) — estimate from the cached tax config
+		// instead of printing a receipt with no tax lines at all.
+		//
+		// grand_total AND rounded_total both come from THIS SAME result,
+		// never from invoice.rounded_total — mixing a total computed here
+		// with one computed by a different code path (e.g. the cart's own
+		// running total at checkout) is exactly how the two numbers on the
+		// receipt end up disagreeing.
 		const result = computeOfflineTax(taxLines, taxConfig, {
 			inclusive,
 			netTotal: netTotalBase,
@@ -91,9 +105,8 @@ export function buildPrintContext(invoice, opts = {}) {
 		net_total = result.net_total;
 		total_taxes_and_charges = result.total_taxes_and_charges;
 		grand_total = result.grand_total;
+		rounded_total = flt(result.grand_total, precision);
 	}
-
-	const rounded_total = flt(invoice.rounded_total || grand_total, precision);
 
 	const payments = (invoice.payments || [])
 		.filter((p) => flt(p.amount))
@@ -108,7 +121,12 @@ export function buildPrintContext(invoice, opts = {}) {
 	const pad = (n) => String(n).padStart(2, "0");
 
 	return {
-		name: invoice.name,
+		// A reprint's `invoice` is the outbox payload saved BEFORE
+		// Payments.vue assigns the provisional name, so invoice.name is
+		// stale or empty in that case — opts.offlineId is the signal this
+		// is a reprint, and provisionalNameFor() derives the same
+		// OFFLINE-INV-... the cashier saw at time of sale.
+		name: opts.offlineId ? provisionalNameFor("invoice", opts.offlineId) : invoice.name,
 		posting_date: invoice.posting_date || datetime.now_date(),
 		// Sale date, print time — deliberately the moment this receipt is
 		// actually being rendered, not necessarily the moment of sale (a
