@@ -17,41 +17,66 @@ frappe.provide("frappe.pospire_filter");
 		);
 	};
 
-	// A bare "%" LIKE pattern does not reliably match blank Link fields
-	// through Frappe's query builder (it doubles literal "%" characters
-	// before building the SQL LIKE clause), so "no profile selected" is
-	// expressed as an exhaustive "in" list instead: every POS Profile name
-	// that exists on the site (frappe.boot.pospire_pos_profile_names), plus
-	// blank. include_blank_always keeps blank in the list even when a
-	// profile IS selected, for doctypes like POS Offer where an
-	// unassigned/company-wide record should still count.
-	frappe.pospire_filter.get_pos_profile_filter_values = function (include_blank_always) {
-		const selected = frappe.pospire_filter._selected.pos_profile;
-		if (selected) {
-			return include_blank_always ? [selected, ""] : [selected];
-		}
-		return [...(frappe.boot.pospire_pos_profile_names || []), ""];
-	};
+	// Doctypes that actually carry pos_profile. An explicit list, not
+	// frappe.meta.has_field(): meta may not be loaded on the dashboard page
+	// and a "no" there would silently drop the till filter. POS Offer is
+	// left out on purpose (offers are company-wide, so filtering them by
+	// till is what made "Active Promotions" read 0), and so is the Customer
+	// card, whose doctype has no till at all.
+	const TILL_DOCTYPES = ["Sales Invoice", "POS Opening Shift"];
 
-	// Single selected profile, for filters that take one value (the Report
-	// chart's own pos_profile filter) rather than an "in" list. Blank means
-	// "no profile selected", which the report treats as all profiles.
+	// Single selected till, for filters that take one value (the Report
+	// chart's own pos_profile filter). Blank means "no till selected", which
+	// that report already treats as all tills.
 	frappe.pospire_filter.get_pos_profile = function () {
 		return frappe.pospire_filter._selected.pos_profile || "";
 	};
 
+	function till_doctype(doc) {
+		const doctype = doc.parent_document_type || doc.document_type;
+		return TILL_DOCTYPES.includes(doctype) ? doctype : null;
+	}
+
+	// Rebuilt on every Apply, never patched in place: dashboard_chart.get()
+	// and number_card.get_result() use the filters they are sent, and only
+	// fall back to filters_json (which has no evaluated company) when none
+	// arrive. Leaving the previous Apply's list in place would keep
+	// filtering by a till the user has just cleared.
+	//
+	// When no till is selected the row is simply not added, rather than sent
+	// as a blank value: blank means "till is empty", which is not the same
+	// as "any till".
+	function build_filters(doc) {
+		const filters = frappe.dashboard_utils.get_all_filters(doc) || [];
+		const till = frappe.pospire_filter._selected.pos_profile;
+		const doctype = till && till_doctype(doc);
+
+		// Child-table charts (Sales Invoice Item/Payment) have no pos_profile
+		// of their own, so the row goes on the parent, the same way their
+		// company filter does.
+		return doctype ? [...filters, [doctype, "pos_profile", "=", till]] : filters;
+	}
+
 	function refresh_chart(widget, awaitable) {
-		// Dropping the in-memory copies is enough for set_chart_filters() to
-		// fall back to the chart's own dynamic filters on the next render.
+		// Report charts take a filter dict, not a list, and carry their own
+		// pos_profile expression, so they only need their stale copy dropped
+		// before the re-render re-evaluates it.
+		if (widget.chart_doc.chart_type === "Report") {
+			delete widget.filters;
+		} else {
+			widget.filters = build_filters(widget.chart_doc);
+		}
+
 		// The user's saved chart config is deliberately left alone: clearing
-		// it here would throw away filters they set themselves, for good,
-		// every time someone pressed Apply.
-		delete widget.filters;
+		// it would throw away filters they set themselves, for good, every
+		// time someone pressed Apply. Only the in-memory copy goes, so the
+		// bar's filters win for this render.
 		if (widget.chart_settings && widget.chart_settings.filters) {
 			delete widget.chart_settings.filters;
 		}
 		delete widget.filter_group;
 
+		// refresh() re-renders and fetches (make_chart -> fetch_and_update_chart).
 		if (!awaitable) {
 			widget.refresh();
 			return null;
@@ -62,6 +87,13 @@ frappe.provide("frappe.pospire_filter");
 		});
 		widget.refresh();
 		return done;
+	}
+
+	function refresh_number_card(widget) {
+		// get_settings() calls this on every refresh, so the override keeps
+		// working for later refreshes and always reads the current selection.
+		widget.get_filters = () => build_filters(widget.card_doc);
+		widget.refresh();
 	}
 
 	async function apply_filters(
@@ -78,7 +110,7 @@ frappe.provide("frappe.pospire_filter");
 
 		number_card_widgets
 			.filter((widget) => widget && widget.card_doc)
-			.forEach((widget) => widget.refresh());
+			.forEach(refresh_number_card);
 
 		await Promise.all(pending);
 

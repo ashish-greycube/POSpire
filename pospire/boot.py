@@ -229,10 +229,10 @@ def extend_bootinfo(bootinfo):
 	Layer 5
 	    Give the POSpire Dashboard/Workspace filter bar a sane starting
 	    Company (pospire_dashboard_company) instead of the site's default
-	    company, which may have no POS Profile at all — and the full list
-	    of POS Profile names (pospire_pos_profile_names) so that filter bar
-	    can express "no POS Profile selected" as a real, always-true filter
-	    condition rather than a SQL wildcard (see pos_universal_filter.js).
+	    company, which may have no POS Profile at all, plus the companies
+	    that bar may offer (pospire_eligible_dashboard_companies). The
+	    till filter needs nothing here: pos_universal_filter.js adds a
+	    pos_profile condition only when one is actually selected.
 	"""
 
 	bootinfo["core_pos_blocked_routes"] = sorted(BLOCKED_DOCTYPE_ROUTES)
@@ -286,13 +286,6 @@ def extend_bootinfo(bootinfo):
 			bootinfo["pospire_dashboard_company"] = None
 			bootinfo["pospire_eligible_dashboard_companies"] = []
 
-		# Disabled profiles are included on purpose: their past sales must
-		# still be counted when no profile is selected. hooks.py clears the
-		# cache when a POS Profile is added or removed, otherwise a new
-		# terminal would be missing from this list (and its sales silently
-		# left out) until something else cleared the boot cache.
-		bootinfo["pospire_pos_profile_names"] = frappe.get_all("POS Profile", pluck="name")
-
 
 # `getpage` must remain guest-callable because it overrides the guest-accessible
 # desk page entry point; it only blocks the POS page and delegates all other
@@ -314,16 +307,3 @@ def getpage(name: str):
 	# Delegate to the original implementation.
 	doc = desk_page.get(name)
 	frappe.response.docs.append(doc)
-
-
-def clear_dashboard_filter_cache(doc=None, method=None):
-	"""
-	Drop cached boot data after a POS Profile is added or removed.
-
-	bootinfo carries pospire_pos_profile_names and the eligible company
-	list, and it is cached per user, so without this a new terminal stays
-	invisible to the dashboard filter (and its sales get left out of the
-	"no profile selected" totals) until some other event clears the cache.
-	"""
-
-	frappe.clear_cache()
