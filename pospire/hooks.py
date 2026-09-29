@@ -133,6 +133,12 @@ doc_events = {
 	"POS Profile": {
 		"validate": "pospire.pospire.doctype.pos_profile.pos_profile.validate_pos_profile",
 		"on_update": "pospire.pospire.utils.pos_server_cache.invalidate_pos_server_cache_from_doc",
+		# boot carries the POS Profile list the dashboard filter uses, and boot
+		# is cached per user. Without this, a newly added terminal is missing
+		# from that list and its sales are quietly left out of the dashboard
+		# until something else clears the cache.
+		"after_insert": "pospire.boot.clear_dashboard_filter_cache",
+		"on_trash": "pospire.boot.clear_dashboard_filter_cache",
 	},
 	"Item": {
 		"on_update": "pospire.pospire.utils.pos_server_cache.invalidate_pos_server_cache_from_doc",

@@ -33,11 +33,22 @@ frappe.provide("frappe.pospire_filter");
 		return [...(frappe.boot.pospire_pos_profile_names || []), ""];
 	};
 
+	// Single selected profile, for filters that take one value (the Report
+	// chart's own pos_profile filter) rather than an "in" list. Blank means
+	// "no profile selected", which the report treats as all profiles.
+	frappe.pospire_filter.get_pos_profile = function () {
+		return frappe.pospire_filter._selected.pos_profile || "";
+	};
+
 	function refresh_chart(widget, awaitable) {
+		// Dropping the in-memory copies is enough for set_chart_filters() to
+		// fall back to the chart's own dynamic filters on the next render.
+		// The user's saved chart config is deliberately left alone: clearing
+		// it here would throw away filters they set themselves, for good,
+		// every time someone pressed Apply.
 		delete widget.filters;
 		if (widget.chart_settings && widget.chart_settings.filters) {
 			delete widget.chart_settings.filters;
-			widget.save_chart_config_for_user({ filters: null });
 		}
 		delete widget.filter_group;
 
@@ -107,6 +118,15 @@ frappe.provide("frappe.pospire_filter");
 				label: __("Company"),
 				fieldtype: "Link",
 				options: "Company",
+				// Only companies that have a POS Profile, the same list the
+				// server picks the starting company from. Offering the rest
+				// just lets the user land on a blank dashboard, and that
+				// choice would then be remembered for next time.
+				get_query: () => ({
+					filters: {
+						name: ["in", frappe.boot.pospire_eligible_dashboard_companies || []],
+					},
+				}),
 			},
 			$bar.find(".pospire-filter-company")
 		);

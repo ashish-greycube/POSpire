@@ -119,14 +119,14 @@
   "docstatus": 0,
   "doctype": "Number Card",
   "document_type": "Customer",
-  "dynamic_filters_json": "[[\"Customer\", \"posa_referral_company\", \"=\", \"frappe.pospire_filter.get_company()\"]]",
+  "dynamic_filters_json": "[[\"Customer\", \"company\", \"=\", \"frappe.pospire_filter.get_company()\"]]",
   "filters_config": null,
-  "filters_json": "[[\"Customer\", \"creation\", \"Timespan\", \"last month\"]]",
-  "function": "Count",
+  "filters_json": "[]",
+  "function": null,
   "is_public": 1,
   "is_standard": 0,
   "label": "New POS Customers (Last Month)",
-  "method": null,
+  "method": "pospire.pospire.api.dashboard_filter.get_new_pos_customers",
   "modified": "2026-09-09 15:15:10.963100",
   "module": "POSpire",
   "name": "New Customers via POS",
@@ -137,7 +137,7 @@
   "show_full_number": 0,
   "show_percentage_stats": 1,
   "stats_time_interval": "Daily",
-  "type": "Document Type"
+  "type": "Custom"
  },
  {
   "aggregate_function_based_on": null,

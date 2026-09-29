@@ -14,38 +14,27 @@ def after_migrate():
 
 def fix_desktop_icon_on_boot(bootinfo):
 	"""
-	Correct known issues with the auto-created POSpire Desktop Icon.
+	Ensure the POSpire Desktop Icon uses Workspace Sidebar instead of External.
 
-	add_to_apps_screen (Frappe core) creates a Desktop Icon for every newly
-	installed app with link_type="External" and icon_type="App":
-	  - "External" opens /pospire in a new tab instead of navigating to the
-	    desk workspace like the icon's siblings do.
-	  - "App" icon_type is for icons that group several child workspaces
-	    (e.g. "Framework"). POSpire has no child icons, so desktop.js's
-	    click handler falls through to its single-workspace route-resolution
-	    path — which, unlike Organization/Buying/Selling/Stock (the other
-	    single-workspace icons here, all icon_type "Link"), never resolves
-	    a route, showing "Icon is not correctly configured" on every click.
+	add_to_apps_screen creates the icon with link_type="External" on first desk
+	load. This hook corrects it so the icon navigates to /desk/pospire instead
+	of opening /pospire in a new tab.
 	"""
 	icon = frappe.db.get_value(
 		"Desktop Icon",
-		{"label": "POSpire"},
-		["name", "link_type", "icon_type"],
-		as_dict=True,
+		{"label": "POSpire", "link_type": "External"},
+		"name",
 	)
 
-	if not icon:
-		return
-
-	updates = {}
-	if icon.link_type == "External":
-		updates["link_type"] = "Workspace Sidebar"
-		updates["link"] = None
-	if icon.icon_type == "App":
-		updates["icon_type"] = "Link"
-
-	if updates:
-		frappe.db.set_value("Desktop Icon", icon.name, updates)
+	if icon:
+		frappe.db.set_value(
+			"Desktop Icon",
+			icon,
+			{
+				"link_type": "Workspace Sidebar",
+				"link": None,
+			},
+		)
 
 		# Ensure subsequent boots pick up the updated icon.
 		frappe.clear_cache()

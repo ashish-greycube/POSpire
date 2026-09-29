@@ -77,14 +77,21 @@ def _remove_workspace_layout_gap(pages):
 		page["content"] = json.dumps(blocks)
 
 
-def _eligible_dashboard_companies():
+def eligible_dashboard_companies():
 	"""
 	Companies with at least one active POS Profile, narrowed to what the
 	current user can actually access.
 
-	frappe.get_all() on Company applies the session user's own permissions
-	(including any User Permission restrictions), so this covers "the user
-	can access" for free — no explicit permission check needed here.
+	The POS Profile scan uses frappe.get_all, which ignores permissions. That
+	is on purpose: it only reads company names, and on stock ERPNext POS
+	Profile is readable by Accounts roles only, so a Sales Manager who can
+	see the dashboard charts would otherwise get nothing here.
+
+	The Company query uses frappe.get_list, which does apply the user's
+	permissions and any User Permission restrictions. That is what decides
+	which companies the user may pick, so the dashboard never starts on (or
+	offers) a company they have no access to. frappe.get_all would skip
+	those checks.
 	"""
 
 	companies_with_pos_profile = frappe.get_all(
@@ -94,7 +101,12 @@ def _eligible_dashboard_companies():
 	if not companies_with_pos_profile:
 		return set()
 
-	permitted = frappe.get_all("Company", filters={"name": ["in", companies_with_pos_profile]}, pluck="name")
+	permitted = frappe.get_list(
+		"Company",
+		filters={"name": ["in", companies_with_pos_profile]},
+		pluck="name",
+		limit_page_length=0,
+	)
 
 	return set(permitted)
 
@@ -107,7 +119,7 @@ def _default_dashboard_company():
 	where that company has no POS Profile, leaving the dashboard blank.
 
 	Tries each of these in order, using the first one that names a company
-	in _eligible_dashboard_companies():
+	in eligible_dashboard_companies():
 	    1. The company the user picked last time (see set_dashboard_company()
 	       in pospire.pospire.api.dashboard_filter).
 	    2. The user's default Company.
@@ -126,7 +138,7 @@ def _default_dashboard_company():
 	Invoice throughout — it's a much smaller table.
 	"""
 
-	eligible = _eligible_dashboard_companies()
+	eligible = eligible_dashboard_companies()
 
 	if not eligible:
 		return None
@@ -263,10 +275,22 @@ def extend_bootinfo(bootinfo):
 		# own try/catch around its page-change handler.
 		try:
 			bootinfo["pospire_dashboard_company"] = _default_dashboard_company()
+			# The filter bar offers exactly these companies, so a user cannot
+			# pick one with no POS Profile and land on a blank dashboard.
+			bootinfo["pospire_eligible_dashboard_companies"] = sorted(eligible_dashboard_companies())
 		except Exception:
-			frappe.log_error(title="pospire: default dashboard company resolution failed")
+			frappe.log_error(
+				title="pospire: default dashboard company resolution failed",
+				message=frappe.get_traceback(with_context=True),
+			)
 			bootinfo["pospire_dashboard_company"] = None
+			bootinfo["pospire_eligible_dashboard_companies"] = []
 
+		# Disabled profiles are included on purpose: their past sales must
+		# still be counted when no profile is selected. hooks.py clears the
+		# cache when a POS Profile is added or removed, otherwise a new
+		# terminal would be missing from this list (and its sales silently
+		# left out) until something else cleared the boot cache.
 		bootinfo["pospire_pos_profile_names"] = frappe.get_all("POS Profile", pluck="name")
 
 
@@ -290,3 +314,16 @@ def getpage(name: str):
 	# Delegate to the original implementation.
 	doc = desk_page.get(name)
 	frappe.response.docs.append(doc)
+
+
+def clear_dashboard_filter_cache(doc=None, method=None):
+	"""
+	Drop cached boot data after a POS Profile is added or removed.
+
+	bootinfo carries pospire_pos_profile_names and the eligible company
+	list, and it is cached per user, so without this a new terminal stays
+	invisible to the dashboard filter (and its sales get left out of the
+	"no profile selected" totals) until some other event clears the cache.
+	"""
+
+	frappe.clear_cache()
