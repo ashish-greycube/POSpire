@@ -10,7 +10,7 @@ DASHBOARD_COMPANY_KEY = "pospire_dashboard_company"
 
 
 @frappe.whitelist()
-def set_dashboard_company(company):
+def set_dashboard_company(company: str):
 	"""
 	Remember the Company the user picked in the POSpire dashboard/workspace
 	filter bar, so a reload starts on the same company.
@@ -32,7 +32,7 @@ def set_dashboard_company(company):
 
 
 @frappe.whitelist()
-def get_new_pos_customers(filters=None):
+def get_new_pos_customers(filters: str | list | None = None):
 	"""
 	Number of customers created in the last month who have at least one
 	submitted POS invoice in the selected company.
@@ -77,7 +77,7 @@ def get_new_pos_customers(filters=None):
 	return {"value": len(set(buyers))}
 
 
-def _company_from_filters(filters):
+def _company_from_filters(filters: str | list | dict | None):
 	filters = frappe.parse_json(filters) or []
 
 	if isinstance(filters, dict):
