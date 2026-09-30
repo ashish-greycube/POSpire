@@ -331,18 +331,18 @@ export default {
 			win.document.open();
 			win.document.write(html);
 			win.document.close();
-			win.addEventListener(
-				"load",
-				() => {
-					try {
-						win.focus();
-						win.print();
-					} catch (e) {
-						console.error("Receipt print trigger failed:", e);
-					}
-				},
-				true,
-			);
+			// No 'load' listener: for a document.write()-based page there is
+			// nothing async to wait for (no images, no fonts), and document
+			// .close() is itself what completes loading — 'load' can fire
+			// before a listener attached afterward ever gets registered,
+			// leaving the window open with content but print() never
+			// triggered. Call print() directly instead of racing the event.
+			try {
+				win.focus();
+				win.print();
+			} catch (e) {
+				console.error("Receipt print trigger failed:", e);
+			}
 		},
 	},
 };

@@ -4211,23 +4211,17 @@ export default {
 					return;
 				}
 				invoice_name = invoice_doc.name ? invoice_doc.name : invoice_name;
-				await this.handlePrint(invoice_name);
+				// Routed through the shared printReceipt() entry point (same as
+				// every other print path) instead of this component's own
+				// hardwareConfiguration + /printview fallback — that duplicate
+				// path had no offline handling: it would open a broken /printview
+				// window instead of the "needs a connection" message everywhere
+				// else shows. A draft invoice is always a real, saved server
+				// document (save_and_clear_invoice already ran), never an
+				// offline/outbox one, so the plain `{ name }` shape is correct.
+				await this.printReceipt({ name: invoice_name });
 			} finally {
 				this.printingDraft = false;
-			}
-		},
-		async handlePrint(invoice_name) {
-			try {
-				await this.hardwareConfiguration(this.pos_profile.name).then((res) => {
-					if (res === true) {
-						this.custom_print(invoice_name);
-					} else {
-						this.load_print_page(invoice_name);
-					}
-				});
-			} catch (err) {
-				console.error("Hardware config check failed:", err);
-				this.load_print_page(invoice_name); // fallback
 			}
 		},
 		async set_delivery_charges() {

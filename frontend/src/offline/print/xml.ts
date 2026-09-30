@@ -90,8 +90,24 @@ function formatDateValue(value, format) {
 			return `${yyyy}-${mm}-${dd}`;
 	}
 }
+const TIME_ONLY_RE = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+
 function formatTimeValue(value, format) {
 	if (!value) return "";
+	// buildPrintContext's posting_time is a bare "HH:mm:ss" string (no
+	// date attached) — new Date("11:42:05") is an Invalid Date, so
+	// routing it through datetime.str_to_obj silently returned the raw,
+	// unformatted string. Parse a time-only value directly instead of
+	// going through Date at all.
+	const timeOnly = TIME_ONLY_RE.exec(String(value));
+	if (timeOnly) {
+		const HH = timeOnly[1].padStart(2, "0");
+		const mm = timeOnly[2];
+		const ss = (timeOnly[3] ?? "00").padStart(2, "0");
+		return format === "HH:mm" ? `${HH}:${mm}` : `${HH}:${mm}:${ss}`;
+	}
+	// A full date/datetime string (e.g. from format_datetime) — Date
+	// parsing works fine here.
 	const d = datetime.str_to_obj(value);
 	if (!d || Number.isNaN(d.getTime())) return String(value);
 	const HH = String(d.getHours()).padStart(2, "0");

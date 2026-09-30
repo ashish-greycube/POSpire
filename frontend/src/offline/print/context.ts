@@ -53,6 +53,14 @@ export function buildPrintContext(invoice, opts = {}) {
 	}));
 	const inclusive = !!(invoice.inclusive_tax ?? posProfile.posa_tax_inclusive);
 	const netTotalBase = flt(total - discountAmount, precision);
+	// Invoice.vue adds this on top of the tax result at checkout (grand =
+	// offlineTax.grand_total + delivery) — untaxed, outside the taxable
+	// base, so it must be added back the same way here or the recomputed
+	// branches below understate the total by exactly this amount.
+	const deliveryCharge = flt(
+		invoice.custom_delivery_charge_rate || invoice.posa_delivery_charges_rate || 0,
+		precision,
+	);
 
 	let taxes = [];
 	let net_total = netTotalBase;
@@ -62,7 +70,7 @@ export function buildPrintContext(invoice, opts = {}) {
 	// module ever runs) unless a branch below overrides it — see the
 	// taxConfig branch, which must not mix a value computed here with one
 	// computed by a different code path.
-	let rounded_total = flt(invoice.rounded_total || netTotalBase, precision);
+	let rounded_total = flt(invoice.rounded_total || netTotalBase + deliveryCharge, precision);
 
 	if (Array.isArray(invoice.taxes) && invoice.taxes.length) {
 		// Prefer taxes already computed onto the invoice (checkout already
@@ -91,11 +99,12 @@ export function buildPrintContext(invoice, opts = {}) {
 		// finished computing them) — estimate from the cached tax config
 		// instead of printing a receipt with no tax lines at all.
 		//
-		// grand_total AND rounded_total both come from THIS SAME result,
-		// never from invoice.rounded_total — mixing a total computed here
-		// with one computed by a different code path (e.g. the cart's own
-		// running total at checkout) is exactly how the two numbers on the
-		// receipt end up disagreeing.
+		// grand_total AND rounded_total both come from THIS SAME result
+		// (plus deliveryCharge, added back on top exactly like Invoice.vue
+		// does at checkout) — never from invoice.rounded_total. Mixing a
+		// total computed here with one computed by a different code path
+		// (e.g. the cart's own running total at checkout) is exactly how
+		// the two numbers on the receipt end up disagreeing.
 		const result = computeOfflineTax(taxLines, taxConfig, {
 			inclusive,
 			netTotal: netTotalBase,
@@ -104,8 +113,8 @@ export function buildPrintContext(invoice, opts = {}) {
 		taxes = result.taxes;
 		net_total = result.net_total;
 		total_taxes_and_charges = result.total_taxes_and_charges;
-		grand_total = result.grand_total;
-		rounded_total = flt(result.grand_total, precision);
+		grand_total = flt(result.grand_total + deliveryCharge, precision);
+		rounded_total = grand_total;
 	}
 
 	const payments = (invoice.payments || [])

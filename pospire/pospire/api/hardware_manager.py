@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 import frappe
 from frappe import _
-from frappe.contacts.doctype.address.address import get_address_display, get_default_address
+from frappe.contacts.doctype.address.address import get_default_address, render_address
 from frappe.utils import cint, flt, fmt_money, format_date, format_datetime, format_time
 from jinja2.sandbox import SandboxedEnvironment
 
@@ -164,6 +164,26 @@ def get_hardware_manager_setting(pos_profile_name: str) -> bool:
 	return True if doc.posa_hardware_manager == 1 else False
 
 
+def _can_access_pos_profile(pos_profile: str) -> bool:
+	"""Whether the current user may read this POS Profile for print-config
+	purposes.
+
+	Real POS access here is membership in the profile's own "Applicable
+	for Users" table (POS Profile User), not the POS Profile doctype's
+	own read permission -- ERPNext core grants that only to Accounts
+	Manager / Accounts User (pos_profile.json), which an ordinary cashier
+	role does not hold. Gating on the doctype permission instead would
+	lock most real cashiers out of offline printing. An empty Applicable
+	for Users table means the profile isn't restricted to specific
+	users. Falls back to the doctype permission so System Manager /
+	Accounts roles managing profiles from Desk are never blocked either.
+	"""
+	applicable_users = frappe.get_all("POS Profile User", filters={"parent": pos_profile}, pluck="user")
+	if not applicable_users or frappe.session.user in applicable_users:
+		return True
+	return bool(frappe.has_permission("POS Profile", "read", pos_profile))
+
+
 @frappe.whitelist()
 def get_offline_print_config(pos_profile: str) -> dict:
 	"""Everything the till needs to build and print a POS receipt itself
@@ -193,7 +213,8 @@ def get_offline_print_config(pos_profile: str) -> dict:
 	# the company's address, and the full receipt template for whichever
 	# POS Profile is named — none of which should be readable by a user who
 	# has no access to that profile.
-	frappe.has_permission("POS Profile", "read", pos_profile, throw=True)
+	if not _can_access_pos_profile(pos_profile):
+		frappe.throw(_("You do not have access to this POS Profile"), frappe.PermissionError)
 
 	profile = frappe.get_cached_doc("POS Profile", pos_profile)
 	company = profile.company
@@ -218,7 +239,14 @@ def get_offline_print_config(pos_profile: str) -> dict:
 		template_modified = default_template.modified
 
 	address_name = profile.get("company_address") or get_default_address("Company", company)
-	company_address_display = get_address_display(address_name) if address_name else None
+	# render_address(..., check_permissions=False): the wrapping
+	# get_address_display() always checks Address-doctype read permission,
+	# which an ordinary cashier role does not have -- discovered while
+	# verifying the POS Profile access fix above. _can_access_pos_profile()
+	# has already established the caller may read this profile's print
+	# config, which is the only gate that should apply to the company's
+	# own address here.
+	company_address_display = render_address(address_name, check_permissions=False) if address_name else None
 
 	system_settings = frappe.get_cached_doc("System Settings")
 	currency = profile.currency or frappe.get_cached_value("Company", company, "default_currency")

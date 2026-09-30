@@ -27,15 +27,17 @@
             <template v-slot:append>
               <v-chip
                 size="small"
-                :color="row.status === 'synced' ? 'success' : 'warning'"
+                :color="row.status === 'synced' ? 'success' : row.status === 'review' ? 'error' : 'warning'"
                 variant="tonal"
                 class="mr-2"
               >
-                {{ row.status === 'synced' ? __('Synced') : __('Pending') }}
+                {{ row.status === 'synced' ? __('Synced') : row.status === 'review' ? __('Needs review') : __('Pending') }}
               </v-chip>
               <v-btn
                 size="small"
                 variant="outlined"
+                :disabled="row.status === 'review'"
+                :title="row.status === 'review' ? __('This sale was not accepted by the server and may still be voided — reprint is disabled until it is resolved.') : undefined"
                 :loading="reprintingId === row.offline_id"
                 @click="reprint(row)"
               >
@@ -53,6 +55,7 @@
 import hardwareUtils from "@/utils/hardwareUtils";
 import { listInvoiceRowsAcrossStatuses } from "@/offline/outbox";
 import { provisionalNameFor } from "@/offline/outbox";
+import { currentCashier } from "@/offline/cashier";
 import connectivity from "@/offline/connectivity";
 import { toast } from "vue3-toastify";
 
@@ -102,15 +105,29 @@ export default {
         if (corruptCount) {
           console.warn(`[OfflineReceipts] ${corruptCount} row(s) could not be read and were skipped`);
         }
+        // owner_user is a plaintext column on the outbox row (no decryption
+        // needed) — without this filter, the same sessionStorage-survives-
+        // logout leak we fixed for Print Last Invoice reopens here: cashier
+        // B could see and reprint cashier A's sales after A logs out.
+        const cashier = currentCashier();
         this.rows = rows
+          .filter((row) => row.owner_user === cashier)
           .sort((a, b) => b.enqueued_at - a.enqueued_at)
           .map((row) => {
             const provisional = provisionalNameFor("invoice", row.offline_id);
             const synced = row.status === "synced" && row.server_doc_name;
+            // needs_review / handed_off: the server has not accepted this
+            // sale and may never accept it (it's stuck pending a manual
+            // decision — see pos_offline_recovery_log). Showing it as plain
+            // "Pending" implies it will sync like any other queued sale;
+            // reprinting it hands the customer a receipt for something that
+            // could still be voided. Kept visible (not dropped) but labelled
+            // distinctly, and Reprint is disabled rather than risking that.
+            const needsReview = row.status === "needs_review" || row.status === "handed_off";
             const when = row.enqueued_at ? new Date(row.enqueued_at).toLocaleString() : "";
             return {
               offline_id: row.offline_id,
-              status: synced ? "synced" : "pending",
+              status: synced ? "synced" : needsReview ? "review" : "pending",
               server_doc_name: row.server_doc_name,
               displayName: synced ? row.server_doc_name : provisional,
               subtitle: when,
