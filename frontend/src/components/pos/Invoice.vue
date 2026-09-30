@@ -2225,8 +2225,11 @@ export default {
 			}
 		},
 
-		// Estimate cart tax from the cached config. Returns null when it can't be
-		// computed offline (no config / unsupported charge type).
+		// Estimate cart tax from the cached config. Always returns the full
+		// OfflineTaxResult, including `supported: false` when it can't be
+		// computed offline (no config / unsupported charge type) — callers
+		// that only care whether it worked read this.offline_tax_supported
+		// (kept in sync here) or result.supported directly.
 		compute_offline_taxes() {
 			const lines = this.items.map((item) => ({
 				net: flt(item.qty) * flt(item.rate),
@@ -2243,7 +2246,7 @@ export default {
 				precision: this.currency_precision,
 			});
 			this.offline_tax_supported = result.supported;
-			return result.supported ? result : null;
+			return result;
 		},
 
 		get_invoice_doc() {
@@ -2274,7 +2277,7 @@ export default {
 			// cashier collects the right amount. `doc.taxes` stays empty on
 			// purpose: the server re-expands taxes on sync and stays authoritative.
 			const offlineTax = this.compute_offline_taxes();
-			if (offlineTax) {
+			if (offlineTax.supported) {
 				const delivery = this.flt(this.delivery_charges_rate || 0, this.currency_precision);
 				const grand = this.flt(offlineTax.grand_total + delivery, this.currency_precision);
 				doc.total = offlineTax.net_total;
@@ -2290,6 +2293,20 @@ export default {
 				doc.rounded_total = this.subtotal;
 				doc.net_total = this.subtotal;
 			}
+			// Print-only: a snapshot of exactly what was computed (and whether
+			// it was even supported) at the moment this sale was made, so
+			// buildPrintContext() can print the SAME numbers on reprint
+			// instead of recomputing from whatever the tax config happens to
+			// be by then (e.g. after an admin edits a rate). Popped server-side
+			// before insert — see offline.py::submit_invoice — never reaches
+			// the real Sales Invoice doc.
+			doc.pospire_print_tax_snapshot = offlineTax;
+			// Same idea for precision: printing later reads a value fetched at
+			// a different time via a different call (System Settings via
+			// get_offline_print_config) than this checkout used (bootinfo's
+			// sys_defaults). Stamp what was actually used here so the two
+			// never disagree on a reprint.
+			doc.currency_precision = this.currency_precision;
 			doc.discount_amount = flt(this.discount_amount);
 			doc.additional_discount_percentage = flt(this.additional_discount_percentage);
 			doc.custom_delivery_charge_rate = this.delivery_charges_rate || 0;

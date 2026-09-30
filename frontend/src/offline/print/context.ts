@@ -26,7 +26,13 @@ export function buildPrintContext(invoice, opts = {}) {
 	const posProfile = opts.posProfile || {};
 	const taxConfig = opts.taxConfig || null;
 	const printConfig = opts.printConfig || {};
-	const precision = printConfig.currency_precision || 2;
+	// Prefer the precision actually used at checkout (stamped onto the
+	// invoice by Invoice.vue::get_invoice_doc from bootinfo's
+	// sys_defaults) over the print config's own (System Settings, fetched
+	// via a different call at a different time) — the two are normally the
+	// same value but can drift, and a reprint must match what the cashier
+	// and customer already saw, not whatever's cached now.
+	const precision = invoice.currency_precision ?? printConfig.currency_precision ?? 2;
 
 	const items = (invoice.items || []).map((it) => ({
 		item_code: it.item_code || "",
@@ -71,6 +77,24 @@ export function buildPrintContext(invoice, opts = {}) {
 	// taxConfig branch, which must not mix a value computed here with one
 	// computed by a different code path.
 	let rounded_total = flt(invoice.rounded_total || netTotalBase + deliveryCharge, precision);
+	// True whenever none of the branches below could produce a real tax
+	// breakdown (no cached config at sale time, or a charge type this
+	// module doesn't support) — the amount charged is still correct
+	// (inclusive pricing already contains the tax; exclusive is blocked at
+	// Pay by show_payment's guard), only the printed line-item breakdown
+	// is missing. Exposed so a template can flag it instead of silently
+	// looking like a tax-free sale.
+	let tax_unavailable = false;
+
+	// Untaxed fallback shared by both "couldn't compute" cases below —
+	// same numbers show_payment's blocked-Pay case already relies on.
+	const applyUntaxedFallback = () => {
+		net_total = netTotalBase;
+		total_taxes_and_charges = 0;
+		grand_total = flt(netTotalBase + deliveryCharge, precision);
+		rounded_total = grand_total;
+		tax_unavailable = true;
+	};
 
 	if (Array.isArray(invoice.taxes) && invoice.taxes.length) {
 		// Prefer taxes already computed onto the invoice (checkout already
@@ -84,6 +108,7 @@ export function buildPrintContext(invoice, opts = {}) {
 			description: t.description || t.account_head,
 			rate: flt(t.rate),
 			tax_amount: flt(t.tax_amount, precision),
+			taxable_amount: flt(t.taxable_amount ?? invoice.net_total ?? netTotalBase, precision),
 		}));
 		total_taxes_and_charges = flt(
 			taxes.reduce((sum, t) => sum + t.tax_amount, 0),
@@ -92,12 +117,33 @@ export function buildPrintContext(invoice, opts = {}) {
 		net_total = flt(invoice.net_total ?? netTotalBase, precision);
 		grand_total = flt(invoice.grand_total ?? netTotalBase + total_taxes_and_charges, precision);
 		rounded_total = flt(invoice.rounded_total || grand_total, precision);
+	} else if (invoice.pospire_print_tax_snapshot) {
+		// Stamped at submit time by Invoice.vue::get_invoice_doc — exactly
+		// what compute_offline_taxes() produced when the sale was made.
+		// Preferred over a fresh taxConfig recompute below so a reprint
+		// can't drift from what was actually charged (e.g. an admin
+		// changing a tax rate between the sale and a later reprint).
+		const snap = invoice.pospire_print_tax_snapshot;
+		if (snap.supported) {
+			taxes = (snap.taxes || []).map((t) => ({
+				account_head: t.account_head,
+				description: t.description || t.account_head,
+				rate: flt(t.rate),
+				tax_amount: flt(t.tax_amount, precision),
+				taxable_amount: flt(t.taxable_amount, precision),
+			}));
+			net_total = flt(snap.net_total, precision);
+			total_taxes_and_charges = flt(snap.total_taxes_and_charges, precision);
+			grand_total = flt(snap.grand_total + deliveryCharge, precision);
+			rounded_total = grand_total;
+		} else {
+			applyUntaxedFallback();
+		}
 	} else if (taxConfig) {
-		// No tax rows on the invoice yet (e.g. an offline submit, which
-		// deliberately leaves `doc.taxes` empty for the server to recompute
-		// on sync, or reprinting from a payload saved before checkout
-		// finished computing them) — estimate from the cached tax config
-		// instead of printing a receipt with no tax lines at all.
+		// No tax rows and no stamped snapshot on the invoice (e.g.
+		// reprinting from an outbox payload saved before this snapshot
+		// existed) — fall back to estimating from the currently cached tax
+		// config rather than printing a receipt with no tax lines at all.
 		//
 		// grand_total AND rounded_total both come from THIS SAME result
 		// (plus deliveryCharge, added back on top exactly like Invoice.vue
@@ -110,11 +156,17 @@ export function buildPrintContext(invoice, opts = {}) {
 			netTotal: netTotalBase,
 			precision,
 		});
-		taxes = result.taxes;
-		net_total = result.net_total;
-		total_taxes_and_charges = result.total_taxes_and_charges;
-		grand_total = flt(result.grand_total + deliveryCharge, precision);
-		rounded_total = grand_total;
+		if (result.supported) {
+			taxes = result.taxes;
+			net_total = result.net_total;
+			total_taxes_and_charges = result.total_taxes_and_charges;
+			grand_total = flt(result.grand_total + deliveryCharge, precision);
+			rounded_total = grand_total;
+		} else {
+			applyUntaxedFallback();
+		}
+	} else {
+		tax_unavailable = true;
 	}
 
 	const payments = (invoice.payments || [])
@@ -162,5 +214,6 @@ export function buildPrintContext(invoice, opts = {}) {
 		payments,
 		change_amount,
 		pospire_pending_sync: opts.pendingSync !== false,
+		tax_unavailable,
 	};
 }

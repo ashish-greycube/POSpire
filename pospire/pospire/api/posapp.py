@@ -1051,6 +1051,14 @@ def submit_invoice(invoice: str | dict, data: str | dict, offline_id: str | None
 	if offline_id and not invoice_doc.get("pos_offline_id"):
 		invoice_doc.pos_offline_id = offline_id
 	_preserve_offline_generated_tax_rows(invoice_doc, invoice)
+	# Print-only fields Invoice.vue stamps onto the payload so an offline
+	# reprint can match what was actually charged (see buildPrintContext /
+	# get_invoice_doc) — not real Sales Invoice fields, so they're popped
+	# here rather than reaching update()/db_insert(). Both the live and
+	# offline submit paths converge on this function (offline.py delegates
+	# to it), so stripping here covers both.
+	invoice.pop("pospire_print_tax_snapshot", None)
+	invoice.pop("currency_precision", None)
 	invoice_doc.update(invoice)
 	# Belt-and-braces floor on item rate. The client clamps before sending
 	# (see Invoice.vue::clamp_item_rate), but a stale tab, replayed offline
