@@ -33,4 +33,4 @@ package-lock.json
 scripts/output/
 
 # Semgrep rules cloned locally for testing — not committed
-frappe-semgrep-rules/
+semgrep-rules/
