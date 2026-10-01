@@ -45,13 +45,13 @@ def execute() -> None:
 	# name we can reference from the rollback patch and from operator
 	# runbooks. Drop to raw SQL. INDEX_NAME and TABLE are module-level
 	# constants (no user input), so the f-string is safe.
-	frappe.db.sql(  # nosemgrep: frappe-semgrep-rules.rules.security.frappe-sql-format-injection
+	frappe.db.sql(  # nosemgrep: frappe-sql-format-injection
 		f"""
 		CREATE INDEX `{INDEX_NAME}`
 		ON `{TABLE}` (`pos_opening_shift_offline_id`, `docstatus`)
 		"""
 	)
-	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit -- DDL must commit; bench migrate wraps the patch and needs the index visible before the next patch runs.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit -- DDL must commit; bench migrate wraps the patch and needs the index visible before the next patch runs.
 	frappe.logger().info(f"[B1] created compound index {INDEX_NAME} on {TABLE}")
 
 

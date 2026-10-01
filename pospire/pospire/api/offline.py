@@ -654,10 +654,10 @@ def _acting_as_user(owner_user: str | None) -> Iterator[None]:
 		# validated above (existence + enabled); session is restored in
 		# the finally block. Audited pattern, not a privilege-escalation
 		# path.
-		frappe.set_user(owner_user)  # nosemgrep: frappe-semgrep-rules.rules.security.frappe-setuser
+		frappe.set_user(owner_user)  # nosemgrep: frappe-setuser
 		yield
 	finally:
-		frappe.set_user(original)  # nosemgrep: frappe-semgrep-rules.rules.security.frappe-setuser
+		frappe.set_user(original)  # nosemgrep: frappe-setuser
 
 
 @contextlib.contextmanager
