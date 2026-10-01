@@ -413,7 +413,7 @@ def retry(name: str) -> dict[str, Any]:
 			detail=(f"refused: schema_version mismatch (row={row_schema}, server={SCHEMA_VERSION})"),
 		)
 		row.save(ignore_permissions=True)
-		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit -- terminal-state save must persist before returning; caller polls via separate request.
+		frappe.db.commit()  # nosemgrep: frappe-manual-commit -- terminal-state save must persist before returning; caller polls via separate request.
 		return {
 			"name": row.name,
 			"status": row.status,
@@ -434,7 +434,7 @@ def retry(name: str) -> dict[str, Any]:
 		detail=f"retry started by {manager_user}",
 	)
 	row.save(ignore_permissions=True)
-	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit -- Make the Retrying transition visible to other tabs immediately (CAS-conflict messaging in this function relies on the reviewer_user/held_since being readable cross-session).
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit -- Make the Retrying transition visible to other tabs immediately (CAS-conflict messaging in this function relies on the reviewer_user/held_since being readable cross-session).
 
 	# --- Replay -----------------------------------------------------------
 	#
@@ -606,7 +606,7 @@ def retry(name: str) -> dict[str, Any]:
 		),
 	)
 	row.save(ignore_permissions=True)
-	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit -- Resolved state must be durable before returning to the manager UI; subsequent retry-poll relies on this row being readable from another session.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit -- Resolved state must be durable before returning to the manager UI; subsequent retry-poll relies on this row being readable from another session.
 	return {
 		"name": row.name,
 		"status": row.status,
@@ -1207,7 +1207,7 @@ def void_entry(name: str, reason: str) -> dict[str, Any]:
 		detail=f"void reason: {reason[:300]}",
 	)
 	row.save(ignore_permissions=True)
-	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit -- Voided is a terminal state; commit before returning so other tabs (and the legal-hold audit) see the row out of Pending Review.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit -- Voided is a terminal state; commit before returning so other tabs (and the legal-hold audit) see the row out of Pending Review.
 	return {"name": row.name, "status": row.status, "outcome": "ok"}
 
 
@@ -1672,7 +1672,7 @@ def edit_payload(
 	if row.status == "Pending Review":
 		row.status = "In Review"
 	row.save(ignore_permissions=True)
-	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit -- Edited payload + In Review CAS marker must be visible to other reviewers before the manager sees the success response.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit -- Edited payload + In Review CAS marker must be visible to other reviewers before the manager sees the success response.
 
 	return {
 		"name": row.name,
@@ -1733,7 +1733,7 @@ def revert_to_original(name: str, reason: str) -> dict[str, Any]:
 			detail=f"revert no-op (already at original) by {frappe.session.user}",
 		)
 		row.save(ignore_permissions=True)
-		frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit -- noop revert still appends an audit-trail activity row; commit so the chain stays observable cross-session.
+		frappe.db.commit()  # nosemgrep: frappe-manual-commit -- noop revert still appends an audit-trail activity row; commit so the chain stays observable cross-session.
 		return {"name": row.name, "outcome": "noop"}
 
 	# Record one edit row capturing the whole-payload revert. before is
@@ -1759,7 +1759,7 @@ def revert_to_original(name: str, reason: str) -> dict[str, Any]:
 		detail=f"reverted to original by {frappe.session.user} — {reason[:200]}",
 	)
 	row.save(ignore_permissions=True)
-	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit -- Revert mutates payload + appends an audit edit; both must be durable before returning so dry_run_replay sees the reverted state.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit -- Revert mutates payload + appends an audit edit; both must be durable before returning so dry_run_replay sees the reverted state.
 	return {"name": row.name, "outcome": "ok"}
 
 
@@ -2111,7 +2111,7 @@ def export_activity(
 	# composed only of literal " AND col = %s" clauses (see above); the
 	# actual values go through `tuple(values)` placeholder substitution.
 	# No user input flows into the f-string.
-	rows = frappe.db.sql(  # nosemgrep: frappe-semgrep-rules.rules.security.frappe-sql-format-injection
+	rows = frappe.db.sql(  # nosemgrep: frappe-sql-format-injection
 		f"""
 		SELECT
 		    r.name AS recovery_name,
@@ -2175,7 +2175,7 @@ def export_activity(
 			# `placeholders` is a "%s, %s, ..." string built from len(groups),
 			# not user input; the actual parent names go through `tuple(groups.keys())`.
 			placeholders = ", ".join(["%s"] * len(groups))
-			# nosemgrep: frappe-semgrep-rules.rules.security.frappe-sql-format-injection
+			# nosemgrep: frappe-sql-format-injection
 			count_sql = f"""
 				SELECT parent, COUNT(*) AS n, MIN(idx) AS min_idx
 				FROM `tabPOSpire Offline Sync Review Activity`
@@ -2515,7 +2515,7 @@ def archive_old_recovery_rows() -> dict[str, Any]:
 			for i in range(0, len(candidate_offline_ids), chunk_size):
 				chunk = candidate_offline_ids[i : i + chunk_size]
 				placeholders = ", ".join(["%s"] * len(chunk))
-				refs = frappe.db.sql(  # nosemgrep: frappe-semgrep-rules.rules.security.frappe-sql-format-injection
+				refs = frappe.db.sql(  # nosemgrep: frappe-sql-format-injection
 					f"""
 					SELECT DISTINCT pos_offline_id
 					FROM {tab}
@@ -2557,7 +2557,7 @@ def archive_old_recovery_rows() -> dict[str, Any]:
 				title=f"archive_old_recovery_rows: delete {name} failed",
 				message=frappe.get_traceback(),
 			)
-	frappe.db.commit()  # nosemgrep: frappe-semgrep-rules.rules.frappe-manual-commit -- Scheduled archive batch can run for minutes; commit so deletions survive a worker restart mid-loop.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit -- Scheduled archive batch can run for minutes; commit so deletions survive a worker restart mid-loop.
 	return {
 		"archived": archived,
 		"skipped_legal_hold": skipped_legal_hold,

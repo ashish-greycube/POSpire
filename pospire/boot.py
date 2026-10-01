@@ -290,7 +290,7 @@ def extend_bootinfo(bootinfo):
 # `getpage` must remain guest-callable because it overrides the guest-accessible
 # desk page entry point; it only blocks the POS page and delegates all other
 # page handling to the ERPNext implementation.
-@frappe.whitelist(allow_guest=True)  # nosemgrep: frappe-semgrep-rules.rules.security.guest-whitelisted-method
+@frappe.whitelist(allow_guest=True)  # nosemgrep: guest-whitelisted-method
 def getpage(name: str):
 	"""
 	Block access to the ERPNext Core Point of Sale page.
