@@ -1526,7 +1526,9 @@ export default {
 			return !this.invoice_doc.is_return || this.is_cashback;
 		},
 		total_payments() {
-			let total = parseFloat(this.invoice_doc.loyalty_amount);
+			// flt, not parseFloat: the offline local doc has no loyalty_amount,
+			// and parseFloat(undefined) = NaN would zero the whole total.
+			let total = this.flt(this.invoice_doc.loyalty_amount);
 			if (this.invoice_doc && this.invoice_doc.payments) {
 				this.invoice_doc.payments.forEach((payment) => {
 					total += this.flt(payment.amount);

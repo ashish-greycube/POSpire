@@ -545,13 +545,22 @@ def get_offline_tax_config(pos_profile: str | dict) -> dict:
 	}
 
 
+# def get_item_group_condition(pos_profile):
+# 	cond = " and 1=1"
+# 	item_groups = get_item_groups(pos_profile)
+# 	if item_groups:
+# 		cond = " and item_group in (%s)" % (", ".join(["%s"] * len(item_groups)))  # noqa: UP031
+
+# 	return cond % tuple(item_groups)
 def get_item_group_condition(pos_profile):
 	cond = " and 1=1"
 	item_groups = get_item_groups(pos_profile)
-	if item_groups:
-		cond = " and item_group in (%s)" % (", ".join(["%s"] * len(item_groups)))  # noqa: UP031
 
-	return cond % tuple(item_groups)
+	if item_groups:
+		item_groups = [frappe.db.escape(item_group) for item_group in item_groups]
+		cond = " and item_group in ({})".format(", ".join(item_groups))
+
+	return cond
 
 
 def get_root_of(doctype):

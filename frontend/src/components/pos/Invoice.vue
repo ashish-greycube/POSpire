@@ -2258,6 +2258,8 @@ export default {
 				doc.net_total = this.subtotal;
 			}
 			doc.discount_amount = flt(this.discount_amount);
+			// The server always returns loyalty_amount; seed it for the offline doc.
+			doc.loyalty_amount = flt(doc.loyalty_amount);
 			doc.additional_discount_percentage = flt(this.additional_discount_percentage);
 			doc.custom_delivery_charge_rate = this.delivery_charges_rate || 0;
 			doc.posa_pos_opening_shift = this.pos_opening_shift?.name || "";
